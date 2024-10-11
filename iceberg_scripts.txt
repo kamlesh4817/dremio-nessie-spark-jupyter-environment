@@ -1,0 +1,204 @@
+SPARK - CREATE TABLE
+import pyspark
+from pyspark.sql import SparkSession
+from pyspark.sql.types import StructType, StructField, IntegerType, StringType, DoubleType
+import os
+
+## DEFINE SENSITIVE VARIABLES
+CATALOG_URI = "http://nessie:19120/api/v1"  # Nessie Server URI
+WAREHOUSE = "s3://warehouse/"               # Minio Address to Write to
+STORAGE_URI = "http://172.22.0.3:9000"      # Minio IP address from docker inspect# Configure Spark with necessary packages and Iceberg/Nessie settings
+conf = (
+    pyspark.SparkConf()
+        .setAppName('sales_data_app')
+        # Include necessary packages
+        .set('spark.jars.packages', 'org.postgresql:postgresql:42.7.3,org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0,org.projectnessie.nessie-integrations:nessie-spark-extensions-3.5_2.12:0.77.1,software.amazon.awssdk:bundle:2.24.8,software.amazon.awssdk:url-connection-client:2.24.8')
+        # Enable Iceberg and Nessie extensions
+        .set('spark.sql.extensions', 'org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions,org.projectnessie.spark.extensions.NessieSparkSessionExtensions')
+        # Configure Nessie catalog
+        .set('spark.sql.catalog.nessie', 'org.apache.iceberg.spark.SparkCatalog')
+        .set('spark.sql.catalog.nessie.uri', CATALOG_URI)
+        .set('spark.sql.catalog.nessie.ref', 'main')
+        .set('spark.sql.catalog.nessie.authentication.type', 'NONE')
+        .set('spark.sql.catalog.nessie.catalog-impl', 'org.apache.iceberg.nessie.NessieCatalog')
+        # Set Minio as the S3 endpoint for Iceberg storage
+        .set('spark.sql.catalog.nessie.s3.endpoint', STORAGE_URI)
+        .set('spark.sql.catalog.nessie.warehouse', WAREHOUSE)
+        .set('spark.sql.catalog.nessie.io-impl', 'org.apache.iceberg.aws.s3.S3FileIO')
+)# Start Spark session
+spark = SparkSession.builder.config(conf=conf).getOrCreate()
+print("Spark Session Started")# Define a schema for the sales data
+schema = StructType([
+    StructField("order_id", IntegerType(), True),
+    StructField("customer_id", IntegerType(), True),
+    StructField("product", StringType(), True),
+    StructField("quantity", IntegerType(), True),
+    StructField("price", DoubleType(), True),
+    StructField("order_date", StringType(), True)
+])# Create a DataFrame with messy sales data (including duplicates and errors)
+sales_data = [
+    (1, 101, "Laptop", 1, 1000.00, "2023-08-01"),
+    (2, 102, "Mouse", 2, 25.50, "2023-08-01"),
+    (3, 103, "Keyboard", 1, 45.00, "2023-08-01"),
+    (1, 101, "Laptop", 1, 1000.00, "2023-08-01"),  # Duplicate
+    (4, 104, "Monitor", None, 200.00, "2023-08-02"),  # Missing quantity
+    (5, None, "Mouse", 1, 25.50, "2023-08-02")  # Missing customer_id
+]# Convert the data into a DataFrame
+sales_df = spark.createDataFrame(sales_data, schema)# Create the "sales" namespace
+spark.sql("CREATE NAMESPACE IF NOT EXISTS nessie.demo;").show()# Write the DataFrame to an Iceberg table in the Nessie catalog
+sales_df.writeTo("nessie.demo.sales_data_raw").createOrReplace()# Verify by reading from the Iceberg table
+spark.read.table("nessie.demo.sales_data_raw").show()# Stop the Spark session
+spark.stop()
+
+SPARK - SELECT TABLE 
+import pyspark
+from pyspark.sql import SparkSession
+from pyspark.sql.types import StructType, StructField, IntegerType, StringType, DoubleType
+import os
+
+## DEFINE SENSITIVE VARIABLES
+CATALOG_URI = "http://nessie:19120/api/v1"  # Nessie Server URI
+WAREHOUSE = "s3://warehouse/"               # Minio Address to Write to
+STORAGE_URI = "http://172.22.0.3:9000"      # Minio IP address from docker inspect# Configure Spark with necessary packages and Iceberg/Nessie settings
+conf = (
+    pyspark.SparkConf()
+        .setAppName('sales_data_app')
+        # Include necessary packages
+        .set('spark.jars.packages', 'org.postgresql:postgresql:42.7.3,org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0,org.projectnessie.nessie-integrations:nessie-spark-extensions-3.5_2.12:0.77.1,software.amazon.awssdk:bundle:2.24.8,software.amazon.awssdk:url-connection-client:2.24.8')
+        # Enable Iceberg and Nessie extensions
+        .set('spark.sql.extensions', 'org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions,org.projectnessie.spark.extensions.NessieSparkSessionExtensions')
+        # Configure Nessie catalog
+        .set('spark.sql.catalog.nessie', 'org.apache.iceberg.spark.SparkCatalog')
+        .set('spark.sql.catalog.nessie.uri', CATALOG_URI)
+        .set('spark.sql.catalog.nessie.ref', 'main')
+        .set('spark.sql.catalog.nessie.authentication.type', 'NONE')
+        .set('spark.sql.catalog.nessie.catalog-impl', 'org.apache.iceberg.nessie.NessieCatalog')
+        # Set Minio as the S3 endpoint for Iceberg storage
+        .set('spark.sql.catalog.nessie.s3.endpoint', STORAGE_URI)
+        .set('spark.sql.catalog.nessie.warehouse', WAREHOUSE)
+        .set('spark.sql.catalog.nessie.io-impl', 'org.apache.iceberg.aws.s3.S3FileIO')
+)# Start Spark session
+spark = SparkSession.builder.config(conf=conf).getOrCreate()
+print("Spark Session Started")# Define a schema for the sales data
+
+spark.sql("select * from nessie.sales.sales_data_raw").show()
+#spark.sql("select * from nessie.demo.sales_data_raw").show()
+#spark.sql("select * from nessie.dremio.names").show()
+
+spark.stop()
+
+
+DREMIO - SELECT 
+from dremio_simple_query.connect import get_token, DremioConnection
+import polars as pl
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Dremio login details
+login_endpoint = "http://dremio:9047/apiv2/login"
+payload = {
+    "userName": "dremio",  # Dremio username
+    "password": "dremio123"  # Dremio password
+}# Get the token
+token = get_token(uri=login_endpoint, payload=payload)# Dremio Arrow Flight endpoint (no SSL for local setup)
+arrow_endpoint = "grpc://dremio:32010"# Create the connection
+dremio = DremioConnection(token, arrow_endpoint)
+
+# Query the Gold dataset
+query = "SELECT * FROM nessie.sales.sales_data_raw;"
+#query = "SELECT * FROM nessie.demo.sales_data_raw;"
+
+df = dremio.toPolars(query)# Display the Polars DataFrame
+print(df)
+
+DREMIO - SELECT - MATPLOTLIB
+
+from dremio_simple_query.connect import get_token, DremioConnection
+import polars as pl
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Dremio login details
+login_endpoint = "http://dremio:9047/apiv2/login"
+payload = {
+    "userName": "dremio",  # Dremio username
+    "password": "dremio123"  # Dremio password
+}# Get the token
+token = get_token(uri=login_endpoint, payload=payload)# Dremio Arrow Flight endpoint (no SSL for local setup)
+arrow_endpoint = "grpc://dremio:32010"# Create the connection
+dremio = DremioConnection(token, arrow_endpoint)
+
+# Query the Gold dataset
+query = "SELECT * FROM nessie.sales.sales_data_gold;"
+df = dremio.toPolars(query)# Display the Polars DataFrame
+print(df)
+
+# Convert the Polars DataFrame to a Pandas DataFrame for Seaborn visualization
+df_pandas = df.to_pandas()# Create a bar plot of total sales by product
+sns.barplot(data=df_pandas, x="product", y="total_sales", palette="viridis")
+plt.title("Total Sales by Product")
+plt.xlabel("Product")
+plt.ylabel("Total Sales")
+plt.xticks(rotation=45)
+plt.show()
+
+
+DREMIO CLOUD - ARROW FLIGHT
+#----------------------------------
+# IMPORTS
+#----------------------------------
+## Import Pyarrow
+from pyarrow import flight
+from pyarrow.flight import FlightClient
+
+## import pandas
+import pandas as pd
+
+## Get environment variables
+from os import environ
+
+token = environ.get('token', '8nt7sKeARPm9C/6C3GvPhhKjmLQiBV6dUit6BQLv/m+2WGk7Wn6rUiFHEMi3xA==')
+
+#----------------------------------
+# Setup
+#----------------------------------
+
+## Headers for Authentication
+headers = [
+    (b"authorization", f"bearer {token}".encode("utf-8"))
+    ]
+
+## Create Client
+client = FlightClient(location=("grpc+tls://data.dremio.cloud:443"))
+
+#----------------------------------
+# Function Definitions
+#----------------------------------
+
+## makeQuery function
+def make_query(query, client, headers):
+    
+
+    ## Get Schema Description and build headers
+    flight_desc = flight.FlightDescriptor.for_command(query)
+    options = flight.FlightCallOptions(headers=headers)
+    schema = client.get_schema(flight_desc, options)
+
+    ## Get ticket to for query execution, used to get results
+    flight_info = client.get_flight_info(flight.FlightDescriptor.for_command(query), options)
+    
+    ## Get Results 
+    results = client.do_get(flight_info.endpoints[0].ticket, options)
+    return results
+
+#----------------------------------
+# Run Query
+#----------------------------------
+
+
+results = make_query("SELECT * FROM TAM.\"wells-fdlz-reporting\" limit 5", client, headers)
+
+# convert to pandas dataframe
+df = results.read_pandas()
+
+print(df)
