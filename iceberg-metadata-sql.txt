@@ -1,0 +1,85 @@
+--DML 
+/*
+DROP TABLE MinIO.sales_data;
+*/
+/*
+CREATE TABLE MinIO.sales_data (
+  id INTEGER,
+  item VARCHAR,
+  quantity INTEGER,
+  price DOUBLE,
+  sale_date DATE
+)
+PARTITION BY (sale_date)
+TBLPROPERTIES (
+  'format-version' = '2'
+);
+*/
+/*
+INSERT INTO MinIO.sales_data (id, item, quantity, price, sale_date)
+VALUES
+  (1, 'Laptop', 5, 999.99, DATE '2022-01-15'),
+  (2, 'Smartphone', 10, 499.99, DATE '2022-01-16'),
+  (3, 'Tablet', 7, 299.99, DATE '2022-01-17');
+*/
+/* 
+SELECT * FROM MinIO.sales_data;
+*/
+/*
+INSERT INTO MinIO.sales_data (id, item, quantity, price, sale_date)
+VALUES
+  (4, 'Headphones', 15, 79.99, DATE '2022-01-18'),
+  (5, 'Smartwatch', 12, 199.99, DATE '2022-01-19');
+*/
+/*
+UPDATE MinIO.sales_data SET quantity = 8 WHERE id = 2;
+*/
+/*
+DELETE FROM MinIO.sales_data WHERE id = 3;
+*/
+--Change Tracking
+/*
+--Listing snapshots
+SELECT * FROM TABLE(table_snapshot('MinIO.sales_data'));
+*/
+/*
+--table history
+SELECT * FROM TABLE(table_history('my_catalog.my_table'));
+*/
+--Time Travel Queries
+/*
+SELECT * FROM MinIO.sales_data AT SNAPSHOT '4190625695761619786';
+*/
+/*
+SELECT * FROM MinIO.sales_data AT TIMESTAMP '2024-10-26 01:44:15.529';
+*/
+/*
+ROLLBACK TABLE MinIO.sales_data TO SNAPSHOT '4190625695761619786';
+*/
+/*
+ROLLBACK TABLE MinIO.sales_data TO TIMESTAMP '2024-10-26 01:45:33.888';
+*/
+/*
+SELECT * FROM TABLE(table_history('MinIO.sales_data'));
+*/
+/*
+SELECT * FROM TABLE(table_snapshot('MinIO.sales_data'));
+*/
+/*
+SELECT * FROM TABLE(table_manifests('MinIO.sales_data'));
+*/
+/*
+SELECT * FROM TABLE(table_partitions('MinIO.sales_data'));
+*/
+/*
+SELECT * FROM TABLE(table_files('MinIO.sales_data'));
+*/
+/*
+SELECT
+  committed_at,
+  snapshot_id,
+  operation,
+  summary[0].key as key1,
+  summary[0]."value" as val1
+FROM TABLE(table_snapshot('MinIO.sales_data'));
+*/
