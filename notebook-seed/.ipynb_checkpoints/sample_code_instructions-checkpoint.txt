@@ -1,0 +1,616 @@
+ASK ALEX
+https://www.dremio.com/blog/3-ways-to-use-python-with-apache-iceberg/#h-iceberg-with-pyarrowpyodbc-dremio-and-other-engines
+https://www.dremio.com/resources/tutorials/getting-started-with-apache-iceberg-using-aws-glue-and-dremio/
+https://www.dremio.com/blog/a-notebook-for-getting-started-with-project-nessie-apache-iceberg-and-apache-spark/
+
+*****
+https://medium.com/data-engineering-with-dremio/collection-of-hands-on-exercises-to-get-started-with-apache-iceberg-8e53b11c054d
+https://github.com/AlexMercedCoder?page=2&tab=repositories
+https://github.com/AlexMercedCoder/dremio-spark-nessie-demo-environment-template
+https://github.com/AlexMercedCoder/spark-dremio-nessie-environment
+https://github.com/AlexMercedCoder/understanding_data_with_alex_merced
+
+
+https://www.dremio.com/blog/experience-the-dremio-lakehouse-hands-on-with-dremio-nessie-iceberg-data-as-code-and-dbt/
+https://medium.com/data-engineering-with-dremio/hands-on-with-apache-iceberg-on-your-laptop-deep-dive-with-apache-spark-nessie-minio-dremio-e7ca3c8a23cb
+
+dremio-minio-nessie-spark-seaborn  -  https://www.youtube.com/watch?v=99Tr5_xsdbQ
+
+https://www.tutorialspoint.com/using-docker-compose-with-private-repositories
+
+https://medium.com/data-engineering-with-dremio/hands-on-with-apache-iceberg-on-your-laptop-deep-dive-with-apache-spark-nessie-minio-dremio-e7ca3c8a23cb
+
+http://localhost:9047/
+
+Adding Nessie Source/Connection Properties
+http://nessie:19120/api/v2
+AWS Bucket username - admin password-password
+fs.s3a.path.style.access true
+fs.s3a.endpoint minio:9000
+dremio.s3.compat true
+UNCHECK - Encrypt connection
+
+ADD MinIO as S3 connection
+AWS Bucket username - admin password-password
+fs.s3a.path.style.access true
+fs.s3a.endpoint minio:9000
+dremio.s3.compat true
+
+DROP TABLE nessie.sales."sales_data_raw" AT BRANCH "main";
+DROP VIEW nessie.sales."sales_data_gold" AT BRANCH "main";
+DROP VIEW nessie.sales."sales_data_silver" AT BRANCH "main";
+
+VDS1 - sales_data_silver
+SELECT DISTINCT
+  COALESCE(order_id, 0) AS order_id,
+  COALESCE(customer_id, 0) AS customer_id,
+  product,
+  COALESCE(quantity, 1) AS quantity,
+  price,
+  order_date
+FROM nessie.sales.sales_data_raw
+WHERE customer_id IS NOT NULL
+
+VDS2 - sales_data_gold
+SELECT
+  product,
+  COUNT(order_id) AS total_orders,
+  SUM(quantity) AS total_quantity_sold,
+  SUM(quantity * price) AS total_sales,
+  AVG(quantity * price) AS avg_order_value
+FROM nessie.sales.sales_data_silver
+GROUP BY product
+
+
+CREATE TABLE IN DREMIO
+CREATE FOLDER IF NOT EXISTS nessie.dremio;
+CREATE TABLE IF NOT EXISTS nessie.dremio.names (name VARCHAR);
+INSERT INTO nessie.dremio.names VALUES ('Kamlesh');
+--INSERT INTO nessie.dremio.names VALUES ('Vijay');
+--INSERT INTO nessie.dremio.names VALUES ('Kedhar');
+
+select * from table(table_snapshot('nessie.dremio.names'))
+
+INSERT INTO nessie.sales."sales_data_raw" VALUES(6, 606,'Mac', 1, 1000.00, '2026-06-01')
+
+
+SPARK - CREATE ICEBERG TABLE
+
+import pyspark
+from pyspark.sql import SparkSession
+from pyspark.sql.types import StructType, StructField, IntegerType, StringType, DoubleType
+import os
+
+## DEFINE SENSITIVE VARIABLES
+CATALOG_URI = "http://nessie:19120/api/v1"  # Nessie Server URI
+WAREHOUSE = "s3://warehouse/"               # Minio Address to Write to
+STORAGE_URI = "http://172.18.0.3:9000"      # Minio IP address from docker inspect# Configure Spark with necessary packages and Iceberg/Nessie settings
+conf = (
+    pyspark.SparkConf()
+        .setAppName('sales_data_app')
+        # Include necessary packages
+        .set('spark.jars.packages', 'org.postgresql:postgresql:42.7.3,org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0,org.projectnessie.nessie-integrations:nessie-spark-extensions-3.5_2.12:0.77.1,software.amazon.awssdk:bundle:2.24.8,software.amazon.awssdk:url-connection-client:2.24.8')
+        # Enable Iceberg and Nessie extensions
+        .set('spark.sql.extensions', 'org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions,org.projectnessie.spark.extensions.NessieSparkSessionExtensions')
+        # Configure Nessie catalog
+        .set('spark.sql.catalog.nessie', 'org.apache.iceberg.spark.SparkCatalog')
+        .set('spark.sql.catalog.nessie.uri', CATALOG_URI)
+        .set('spark.sql.catalog.nessie.ref', 'main')
+        .set('spark.sql.catalog.nessie.authentication.type', 'NONE')
+        .set('spark.sql.catalog.nessie.catalog-impl', 'org.apache.iceberg.nessie.NessieCatalog')
+        # Set Minio as the S3 endpoint for Iceberg storage
+        .set('spark.sql.catalog.nessie.s3.endpoint', STORAGE_URI)
+        .set('spark.sql.catalog.nessie.warehouse', WAREHOUSE)
+        .set('spark.sql.catalog.nessie.io-impl', 'org.apache.iceberg.aws.s3.S3FileIO')
+)# Start Spark session
+spark = SparkSession.builder.config(conf=conf).getOrCreate()
+print("Spark Session Started")# Define a schema for the sales data
+schema = StructType([
+    StructField("order_id", IntegerType(), True),
+    StructField("customer_id", IntegerType(), True),
+    StructField("product", StringType(), True),
+    StructField("quantity", IntegerType(), True),
+    StructField("price", DoubleType(), True),
+    StructField("order_date", StringType(), True)
+])# Create a DataFrame with messy sales data (including duplicates and errors)
+sales_data = [
+    (1, 101, "Laptop", 1, 1000.00, "2023-08-01"),
+    (2, 102, "Mouse", 2, 25.50, "2023-08-01"),
+    (3, 103, "Keyboard", 1, 45.00, "2023-08-01"),
+    (1, 101, "Laptop", 1, 1000.00, "2023-08-01"),  # Duplicate
+    (4, 104, "Monitor", None, 200.00, "2023-08-02"),  # Missing quantity
+    (5, None, "Mouse", 1, 25.50, "2023-08-02")  # Missing customer_id
+]# Convert the data into a DataFrame
+sales_df = spark.createDataFrame(sales_data, schema)# Create the "sales" namespace
+spark.sql("CREATE NAMESPACE nessie.sales;").show()# Write the DataFrame to an Iceberg table in the Nessie catalog
+sales_df.writeTo("nessie.sales.sales_data_raw").createOrReplace()# Verify by reading from the Iceberg table
+spark.read.table("nessie.sales.sales_data_raw").show()# Stop the Spark session
+spark.stop()
+
+DREMIO ARROW FLIGHT QUERY 
+
+from dremio_simple_query.connect import get_token, DremioConnection
+import polars as pl
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Dremio login details
+login_endpoint = "http://dremio:9047/apiv2/login"
+payload = {
+    "userName": "dremio",  # Dremio username
+    "password": "dremio123"  # Dremio password
+}# Get the token
+token = get_token(uri=login_endpoint, payload=payload)# Dremio Arrow Flight endpoint (no SSL for local setup)
+arrow_endpoint = "grpc://dremio:32010"# Create the connection
+dremio = DremioConnection(token, arrow_endpoint)
+
+# Query the Gold dataset
+query = "SELECT * FROM nessie.sales.sales_data_gold;"
+df = dremio.toPolars(query)# Display the Polars DataFrame
+print(df)
+
+# Convert the Polars DataFrame to a Pandas DataFrame for Seaborn visualization
+df_pandas = df.to_pandas()# Create a bar plot of total sales by product
+sns.barplot(data=df_pandas, x="product", y="total_sales", palette="viridis")
+plt.title("Total Sales by Product")
+plt.xlabel("Product")
+plt.ylabel("Total Sales")
+plt.xticks(rotation=45)
+plt.show()
+
+SPARK - QUERY ICEBERG TABLE
+
+import pyspark
+from pyspark.sql import SparkSession
+from pyspark.sql.types import StructType, StructField, IntegerType, StringType, DoubleType
+import os
+
+## DEFINE SENSITIVE VARIABLES
+CATALOG_URI = "http://nessie:19120/api/v1"  # Nessie Server URI
+WAREHOUSE = "s3://warehouse/"               # Minio Address to Write to
+STORAGE_URI = "http://172.22.0.3:9000"      # Minio IP address from docker inspect# Configure Spark with necessary packages and Iceberg/Nessie settings
+conf = (
+    pyspark.SparkConf()
+        .setAppName('sales_data_app')
+        # Include necessary packages
+        .set('spark.jars.packages', 'org.postgresql:postgresql:42.7.3,org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0,org.projectnessie.nessie-integrations:nessie-spark-extensions-3.5_2.12:0.77.1,software.amazon.awssdk:bundle:2.24.8,software.amazon.awssdk:url-connection-client:2.24.8')
+        # Enable Iceberg and Nessie extensions
+        .set('spark.sql.extensions', 'org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions,org.projectnessie.spark.extensions.NessieSparkSessionExtensions')
+        # Configure Nessie catalog
+        .set('spark.sql.catalog.nessie', 'org.apache.iceberg.spark.SparkCatalog')
+        .set('spark.sql.catalog.nessie.uri', CATALOG_URI)
+        .set('spark.sql.catalog.nessie.ref', 'main')
+        .set('spark.sql.catalog.nessie.authentication.type', 'NONE')
+        .set('spark.sql.catalog.nessie.catalog-impl', 'org.apache.iceberg.nessie.NessieCatalog')
+        # Set Minio as the S3 endpoint for Iceberg storage
+        .set('spark.sql.catalog.nessie.s3.endpoint', STORAGE_URI)
+        .set('spark.sql.catalog.nessie.warehouse', WAREHOUSE)
+        .set('spark.sql.catalog.nessie.io-impl', 'org.apache.iceberg.aws.s3.S3FileIO')
+)# Start Spark session
+spark = SparkSession.builder.config(conf=conf).getOrCreate()
+print("Spark Session Started")# Define a schema for the sales data
+
+#spark.sql("select * from nessie.sales.sales_data_silver").show()
+spark.sql("select * from nessie.dremio.names").show()
+
+spark.stop()
+
+https://www.dremio.com/time-travel-with-dremio-and-apache-iceberg/
+
+TIME TRAVEL
+CREATE TABLE nessie.dremio.sales_data
+AS SELECT * FROM minio."5000-sales-records.parquet"
+limit 200
+select count(*) from nessie.dremio.sales_data
+INSERT INTO  nessie.dremio.sales_data
+SELECT * from minio."5000-sales-records.parquet"
+limit 500;
+select count(*) from nessie.dremio.sales_data
+SELECT * FROM TABLE( table_history('nessie.dremio."sales_data"' ));
+SELECT * FROM nessie.dremio."sales_data" AT SNAPSHOT '8272850966014830361';
+
+https://www.dremio.com/blog/intro-to-dremio-nessie-and-apache-iceberg-on-your-laptop/
+
+HIDDEN PARTITIONING
+
+CREATE TABLE people (
+id INT,
+first_name VARCHAR,
+last_name VARCHAR,
+age INT
+) PARTITION BY (truncate(1, last_name));
+
+INSERT INTO people (id, first_name, last_name, age) VALUES
+(1, 'John', 'Doe', 28),
+(2, 'Jane', 'Smith', 34),
+(3, 'Alice', 'Johnson', 22),
+(4, 'Bob', 'Williams', 45),
+(5, 'Charlie', 'Brown', 30),
+(6, 'David', 'Jones', 25),
+(7, 'Eve', 'Garcia', 32),
+(8, 'Frank', 'Miller', 29),
+(9, 'Grace', 'Lee', 27),
+(10, 'Henry', 'Davis', 38);
+ALTER TABLE people ADD PARTITION FIELD truncate(1, first_name);
+INSERT INTO people (id, first_name, last_name, age) VALUES (11, 'Isabella', 'Rodriguez', 40), (12, 'Jack', 'Martinez', 36), (13, 'Kylie', 'Hernandez', 24), (14, 'Leo', 'Lopez', 26), (15, 'Mia', 'Gonzalez', 35), (16, 'Nolan', 'Perez', 29), (17, 'Olivia', 'Wilson', 31), (18, 'Paul', 'Anderson', 33), (19, 'Quinn', 'Thomas', 27), (20, 'Rebecca', 'Taylor', 28);
+SELECT * FROM nessie.people WHERE last_name LIKE 'G%';
+
+
+https://www.dremio.com/blog/ingesting-data-into-apache-iceberg-tables-with-dremio-a-unified-path-to-iceberg/
+
+CREATE TABLE
+CREATE TABLE arctic.sales AS SELECT * FROM postgres.sales;
+Partitioned and sorted table:
+CREATE TABLE arctic.voters.bronze.voter_data
+  PARTITION BY (state)
+  LOCALSORT BY (city)
+  AS SELECT * FROM mysql.voter_data;
+Using partition transformations:
+CREATE TABLE arctic.employees
+  (id INT, first_name VARCHAR, last_name VARCHAR, hire_date DATE)
+  PARTITION BY (month(col2));
+
+MERGE INTO - The MERGE INTO statement enables conditional updates or inserts based on the presence of matching rows between a target and a source table.
+MERGE INTO arctic.target_table AS t
+USING postgres.source_table AS s
+ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET description = s.description
+WHEN NOT MATCHED THEN INSERT (id, description) VALUES (s.id, s.description);
+
+INSERT INTO
+INSERT INTO arctic.sales_data
+  SELECT * FROM postgres.sales_info;
+Insert specific columns:
+INSERT INTO arctic.customer_data (id, name, email)
+  SELECT customer_id, customer_name, customer_email FROM mysql.customer_info;
+Inserting into a specific branch:
+INSERT INTO arctic.product_catalog
+  AT BRANCH main
+  SELECT * FROM postgres.product_list;
+
+BRANCHING AND MERGING
+
+CREATE BRANCH ingest in nessie;
+USE BRANCH ingest;
+INSERT INTO nessie.people (id, first_name, last_name, age) VALUES
+(21, 'Samuel', 'Graham', 42),
+(22, 'Tina', 'Gray', 37),
+(23, 'Ursula', 'Green', 45),
+(24, 'Victor', 'Gibson', 29),
+(25, 'Wendy', 'Gates', 31),
+(26, 'Xavier', 'Graves', 28),
+(27, 'Yasmine', 'Gomez', 30),
+(28, 'Zane', 'Goodman', 33),
+(29, 'Aria', 'Guthrie', 25),
+(30, 'Brock', 'Garner', 40);
+USE BRANCH ingest;
+SELECT * FROM nessie.people;
+USE BRANCH main;
+SELECT * FROM nessie.people;
+
+CONVERT CSV TO ICEBERG
+
+CREATE TABLE MOCK_DATA_CTAS AS SELECT * FROM nessie."MOCK_DATA_CURATED";
+-- CREATE AN EMPTY TABLE WITH A MATCHING SCHEMA
+CREATE TABLE MOCK_DATA_COPY AS SELECT * FROM nessie."MOCK_DATA_CURATED" limit 0;
+-- COPY THE DATA FROM THE CSV INTO THE TABLE
+COPY INTO MOCK_DATA_COPY FROM "@minio" FILES ('MOCK_DATA.csv');
+
+Copying all files in a folder:
+COPY INTO arctic.sales_data
+  FROM '@s3/bucket-name/sales-data-folder/'
+  FILE_FORMAT 'json';
+Copying specific files:
+COPY INTO arctic.customer_data
+  FROM '@s3/bucket-name/customer-data-folder/'
+  FILES ('customers.csv', 'additional_customers.csv')
+  FILE_FORMAT 'csv'
+  (FIELD_DELIMITER ',');
+Using regular expressions for file selection:
+COPY INTO arctic.product_catalog
+  FROM '@s3/bucket-name/product-data/'
+  REGEX '.*2024.*\\.parquet'
+  FILE_FORMAT 'parquet';
+
+
+VACUUM
+VACUUM TABLE <table_name>
+    EXPIRE SNAPSHOTS [older_than <value>]  [retain_last <value>]
+
+
+DREMIO CLOUD 
+#----------------------------------
+# IMPORTS
+#----------------------------------
+## Import Pyarrow
+from pyarrow import flight
+from pyarrow.flight import FlightClient
+
+## import pandas
+import pandas as pd
+
+## Get environment variables
+from os import environ
+
+token = environ.get('token', '8nt7sKeARPm9C/6C3GvPhhKjmLQiBV6dUit6BQLv/m+2WGk7Wn6rUiFHEMi3xA==')
+
+#----------------------------------
+# Setup
+#----------------------------------
+
+## Headers for Authentication
+headers = [
+    (b"authorization", f"bearer {token}".encode("utf-8"))
+    ]
+
+## Create Client
+client = FlightClient(location=("grpc+tls://data.dremio.cloud:443"))
+
+#----------------------------------
+# Function Definitions
+#----------------------------------
+
+## makeQuery function
+def make_query(query, client, headers):
+    
+
+    ## Get Schema Description and build headers
+    flight_desc = flight.FlightDescriptor.for_command(query)
+    options = flight.FlightCallOptions(headers=headers)
+    schema = client.get_schema(flight_desc, options)
+
+    ## Get ticket to for query execution, used to get results
+    flight_info = client.get_flight_info(flight.FlightDescriptor.for_command(query), options)
+    
+    ## Get Results 
+    results = client.do_get(flight_info.endpoints[0].ticket, options)
+    return results
+
+#----------------------------------
+# Run Query
+#----------------------------------
+
+
+results = make_query("SELECT * FROM TAM.\"wells-fdlz-reporting\" limit 5", client, headers)
+
+# convert to pandas dataframe
+df = results.read_pandas()
+
+print(df)
+
+
+
+*******
+select * from sys."tables" where table_name = 'orders'
+
+drop table "local-data-model-folder"."iceberg_data"."orders"
+create table "local-data-model-folder"."iceberg_data"."orders"
+as select * from "local-data-model-folder"."orders.parquet"
+
+select count(*) from "local-data-model-folder"."iceberg_data"."orders"
+
+insert into "local-data-model-folder"."iceberg_data"."orders"
+select * from "local-data-model-folder"."orders.parquet" limit 10
+
+optimize table "local-data-model-folder"."iceberg_data"."orders"
+vacuum table "local-data-model-folder"."iceberg_data"."orders" expire snapshots
+
+select count(*) from table(table_files('"local-data-model-folder"."iceberg_data"."orders"'))
+select * from table(table_files('"local-data-model-folder"."iceberg_data"."orders"'))
+select * from table(table_manifests('"local-data-model-folder"."iceberg_data"."orders"'))
+select * from table(table_snapshot('"local-data-model-folder"."iceberg_data"."orders"'))
+select * from table(table_history('"local-data-model-folder"."iceberg_data"."orders"'))
+4:07
+--drop table if exists "Demo".Preparation.cf_template;
+create table "Demo".Preparation.cf_template
+(p_l_date date,
+conf_id int,
+party_id varchar,
+legal_entity_code int,
+source_system varchar,
+cost_center varchar,
+exchange_amt int,
+usd_amt int,
+exchange_currency varchar,
+"10Q_Lv1" varchar,
+"10Q_Lv2" varchar,
+"10Q_Lv3" varchar,
+"10Q_Lv4" varchar,
+"10Q_Lv5" varchar,
+"10Q_Lv6" varchar,
+"10Q_Lv7" varchar,
+product_type varchar,
+feed_product varchar,
+country_of_jurisdiction varchar
+);
+
+---
+--- CLEAN UP DEMO ---
+drop table if exists "Demo".Preparation."cash_flow" AT BRANCH "main";
+drop branch if exists daily_etl;
+drop tag if exists "pre_merge";
+drop branch if exists data_science_1;
+drop branch if exists data_science_2;
+---
+
+create table if not exists Demo.Preparation.cash_flow AT BRANCH "main"
+as select * from Demo.Preparation.cf_template;
+
+copy into "Demo".Preparation."cash_flow" AT BRANCH "main"
+from '@project-bucket/kamran-dremio/data/cf_0525.csv'
+(DATE_FORMAT 'MM/DD/YYYY');
+
+----------- base table created, tagged -----------
+
+select * from "Demo".Preparation."cash_flow" AT BRANCH "main";
+
+create tag pre_merge;
+
+create branch daily_etl;
+
+select * from "Demo".Preparation."cash_flow" AT BRANCH "main";
+select * from "Demo".Preparation."cash_flow" AT BRANCH "daily_etl";
+
+delete from "Demo".Preparation."cash_flow" AT BRANCH "daily_etl"
+where conf_id = 111; 
+
+update "Demo".Preparation."cash_flow" AT BRANCH "daily_etl"
+set usd_amt = usd_amt*10 
+where conf_id=444; 
+
+select * from "Demo".Preparation."cash_flow" AT BRANCH "daily_etl";
+select * from "Demo".Preparation."cash_flow" AT BRANCH "main";
+
+merge branch "daily_etl" into "main";
+
+drop branch "daily_etl";
+
+select * from "Demo".Preparation."cash_flow" AT TAG "pre_merge";
+select * from "Demo".Preparation."cash_flow" AT BRANCH "main";
+
+create branch data_science_1;
+create branch data_science_2;
+
+delete from "Demo".Preparation."cash_flow" AT BRANCH "data_science_1"
+where conf_id in (222,333); 
+
+copy into "Demo".Preparation."cash_flow" AT BRANCH data_science_2
+from '@project-bucket/kamran-dremio/data/cf_0526.csv'
+(DATE_FORMAT 'MM/DD/YYYY');
+
+select * from "Demo".Preparation."cash_flow" AT BRANCH data_science_1;
+select * from "Demo".Preparation."cash_flow" AT BRANCH data_science_2;
+select * from "Demo".Preparation."cash_flow" AT BRANCH "main";
+select * from "Demo".Preparation."cash_flow" AT TAG "pre_merge";
+
+--Get Commit ID hash from 'pre-merge' Tag, set the main branch to before daily_etl changes:
+ALTER BRANCH "main"
+ASSIGN COMMIT "1966313b75d9c17373f9ab780cd8f940733da6963b9e252561a7f6795cefeb63";
+
+*******
+---
+--- CLEAN UP DEMO ---
+drop table if exists Demo.Preparation.raw.cashflow.cf AT BRANCH "main";
+truncate table Demo.Preparation.raw.cashflow.cf AT BRANCH "main";
+---
+
+
+create table Demo.Preparation.raw.cashflow.cf
+(p_l_date date,
+conf_id int,
+party_id varchar,
+legal_entity_code int,
+source_system varchar,
+cost_center varchar,
+exchange_amt int,
+usd_amt int,
+exchange_currency varchar,
+"10Q_Lv1" varchar,
+"10Q_Lv2" varchar,
+"10Q_Lv3" varchar,
+"10Q_Lv4" varchar,
+"10Q_Lv5" varchar,
+"10Q_Lv6" varchar,
+"10Q_Lv7" varchar,
+product_type varchar,
+feed_product varchar,
+country_of_jurisdiction varchar
+);
+
+select * from sys.project."tables" where format_type = 'ICEBERG' order by created desc
+
+--optimize table Demo.Preparation.raw.cashflow.cf;
+--vacuum table Demo.Preparation.raw.cashflow.cf EXPIRE SNAPSHOTS;
+--vacuum catalog main;
+
+copy into Demo.Preparation.raw.cashflow.cf AT BRANCH "main"
+from '@project-bucket/kamran-dremio/data/cf_0525.csv'
+(DATE_FORMAT 'MM/DD/YYYY');
+
+select * from Demo.Preparation.raw.cashflow.cf AT BRANCH "main";
+
+update Demo.Preparation.raw.cashflow.cf
+set usd_amt = usd_amt*10 
+where conf_id=333; 
+
+select * from Demo.Preparation.raw.cashflow.cf AT BRANCH "main";
+
+delete from Demo.Preparation.raw.cashflow.cf
+where conf_id in (111,222); 
+
+copy into Demo.Preparation.raw.cashflow.cf
+from '@project-bucket/kamran-dremio/data/cf_0526.csv'
+(DATE_FORMAT 'MM/DD/YYYY');
+
+select * from Demo.Preparation.raw.cashflow.cf AT BRANCH "main";
+
+**********
+
+select * from sys.project."pipes"
+
+select extract(year from "CRASH DATE_1") as years, count(*) from Demo.Preparation.raw."motor_vehicle_data" AT BRANCH "main"
+group by years
+
+select * from Demo.Preparation.raw."motor_vehicle_data"
+where extract(year from "CRASH DATE_1") = '2022'
+
+create table Demo.Preparation.raw.dmv_crashes as 
+select * from Demo.Preparation.raw."motor_vehicle_data" AT BRANCH "main" limit 0
+
+DROP PIPE dmv_pipe
+
+CREATE PIPE if not exists dmv_pipe
+  AS COPY INTO Demo.Preparation.raw."dmv_crashes" AT BRANCH "main"
+    FROM '@project-bucket/kamran-dremio/dmv_pipeline'
+    FILE_FORMAT 'parquet'
+
+desc pipe dmv_pipe
+
+select * from Demo.Preparation.raw."dmv_crashes" AT BRANCH "main"
+select * from sys.project."pipes"
+select * from sys.project.copy_file_history
+
+
+aws s3api put-bucket-notification-configuration --bucket kamran-dremio --notification-configuration "$(notification=$(aws s3api get-bucket-notification-configuration --bucket kamran-dremio); if [ -z "$notification" ]; then echo '{"TopicConfigurations": []}'; else echo "$notification"; fi | jq --argjson new_config '{"Id":"pipe_f78215e5-f6b5-40ce-b0f6-24f114be43e4_cab05f64-b3ce-4f0c-9734-70b00e30f4e4","TopicArn":"arn:aws:sns:us-east-1:894535543691:dremio-5be5e30e-5fa7-4c45-9829-0ad1fae22a9d","Events":["s3:ObjectCreated:Put","s3:ObjectCreated:Post"],"Filter":{"Key":{"FilterRules":[{"Name":"prefix","Value":"dmv_pipeline"}]}}}' '.TopicConfigurations += [$new_config]')"
+
+
+CURL Commands
+List All Available Branches -> curl -X GET "http://nessie:19120/api/v1/trees"
+List All Tables in the sales Namespace-> curl -X GET "http://nessie:19120/api/v1/contents/sales?ref=main"
+List All Tables in the sales Namespace-> curl -X GET "http://nessie:19120/api/v1/contents/sales?ref=main"
+
+Retrieve Specific Metadata for the sales_data_raw Table-> curl -X GET "http://nessie:19120/api/v1/contents/sales.sales_data_raw?ref=main"
+curl -X GET "http://nessie:19120/api/v1/tables/sales.sales_data_raw/refs/main/snapshots"
+curl -X GET "http://nessie:19120/api/v1/trees/main"
+
+
+curl -X 'GET' \
+  'http://nessie:19120/v1/config' \
+  -H 'accept: application/json'
+  
+  
+Examine the Iceberg Metadata Files:
+# Examine the Iceberg Metadata Files:
+import boto3
+import json
+
+# Define Minio connection parameters
+minio_client = boto3.client(
+    's3',
+    endpoint_url='http://172.18.0.3:9000',  # Minio IP address from docker inspect
+    aws_access_key_id='admin',
+    aws_secret_access_key='password',
+    region_name='us-east-1'
+)
+
+# Specify the bucket and metadata file path
+bucket_name = 'warehouse'
+metadata_file_key = 'sales/sales_data_raw_195fb773-96d5-47d7-9cce-f26fe36f53d3/metadata/00000-4fbc9fa4-d122-45ab-a606-5a1b43a322ce.metadata.json'  # Example metadata path
+
+# Download the metadata file
+metadata_file = minio_client.get_object(Bucket=bucket_name, Key=metadata_file_key)
+metadata_content = metadata_file['Body'].read().decode('utf-8')
+
+# Parse and print the metadata content
+metadata_json = json.loads(metadata_content)
+print(json.dumps(metadata_json, indent=4))

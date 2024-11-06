@@ -93,7 +93,8 @@ services:
   # Dremio
   dremio:
     platform: linux/x86_64
-    image: dremio/dremio-oss:latest
+    #image: dremio/dremio-oss:latest
+    image: quay.io/dremio/dremio-ee:24.3.0
     ports:
       - 9047:9047
       - 31010:31010
@@ -104,6 +105,8 @@ services:
       - DREMIO_JAVA_SERVER_EXTRA_OPTS=-Dpaths.dist=file:///opt/dremio/data/dist
     networks:
       intro-network:
+    #imagePullSecrets:
+      #- dremio-image-secret      
 
 networks:
   intro-network:
